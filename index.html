@@ -280,11 +280,21 @@ async function route(pts,alt){
       const txt=await r.text();
       if(!r.ok||txt[0]!=="{")throw new Error(txt.slice(0,140));
       const f=JSON.parse(txt).features[0];goodProfile=prof;
-      const c=f.geometry.coordinates.map(x=>({lon:x[0],lat:x[1],ele:x[2]}));
+      let c=f.geometry.coordinates.map(x=>({lon:x[0],lat:x[1],ele:x[2]}));
+      if(S.shape!=="out")c=cutSpurs(c);
       return analyse(c);
     }catch(e){lastErr=e;}
   }
   throw lastErr||new Error("routage impossible");
+}
+/* supprime les culs-de-sac : quand le tracé repasse sur ses propres pas, on coupe l'aller-retour */
+function cutSpurs(c){
+  const st=[];
+  for(const p of c){
+    while(st.length>=2&&hav(p,st[st.length-2])<0.012)st.pop();
+    if(!st.length||hav(p,st[st.length-1])>0.002)st.push(p);
+  }
+  return st.length>10?st:c;
 }
 function analyse(c){
   let d=0,up=0,dn=0;const cum=[0];
