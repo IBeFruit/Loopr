@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Loopr</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;700&family=Barlow:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+/* Layout: panneau de réglages à gauche (empilé sur mobile), carte plein cadre, propositions sous les réglages */
+:root{
+  --bg:#0b0b0c; --panel:#141416; --chip:#1e1f22; --line:#2a2b2f;
+  --fg:#f3f3f1; --mu:#8d8e93; --ac:#c6ff00; --acT:#0b0b0c;
+  --r1:#c6ff00; --r2:#00e0ff; --r3:#ff4d8d; --err:#ff6b5b;
+  --display:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
+  --body:"Barlow",system-ui,-apple-system,"Segoe UI",sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font:15px/1.45 var(--body)}
+button,input,select{font:inherit;color:inherit}
+.app{display:grid;grid-template-columns:minmax(0,400px) minmax(0,1fr);height:100%}
+.side{overflow-y:auto;padding:16px max(16px,env(safe-area-inset-left,0px)) 32px;border-right:1px solid var(--line);display:flex;flex-direction:column;gap:18px;padding-top:max(16px,env(safe-area-inset-top,0px))}
+#map{height:100%;background:#111}
+header{display:flex;align-items:baseline;justify-content:space-between}
+h1{font:700 30px/1 var(--display);letter-spacing:.02em;margin:0}
+h1 span{color:var(--ac)}
+.tag{color:var(--mu);font-size:13px}
+.lbl{font:500 12px/1 var(--body);text-transform:uppercase;letter-spacing:.08em;color:var(--mu);margin-bottom:8px;display:flex;justify-content:space-between}
+.seg{display:flex;gap:6px;flex-wrap:wrap}
+.seg button{flex:1 1 auto;min-height:40px;padding:8px 12px;border:1px solid var(--line);background:var(--chip);border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;white-space:nowrap}
+.seg button[aria-pressed="true"]{background:var(--ac);color:var(--acT);border-color:var(--ac);font-weight:600}
+.seg button:focus-visible,.btn:focus-visible,input:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
+.field{display:flex;gap:6px}
+.field input{flex:1;min-width:0;height:42px;padding:0 12px;background:var(--chip);border:1px solid var(--line);border-radius:8px}
+.field input::placeholder{color:var(--mu)}
+.icobtn{width:42px;height:42px;border:1px solid var(--line);background:var(--chip);border-radius:8px;cursor:pointer;flex:none}
+.results{list-style:none;margin:6px 0 0;padding:0;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.results li button{width:100%;text-align:left;padding:9px 12px;background:var(--panel);border:0;border-bottom:1px solid var(--line);cursor:pointer;font-size:13px}
+.results li:last-child button{border-bottom:0}
+.results li button:hover{background:var(--chip)}
+.pt{font-size:13px;color:var(--mu);margin-top:6px}
+.pt b{color:var(--fg);font-weight:500}
+.dist{display:flex;align-items:center;gap:12px}
+.dist input[type=range]{flex:1;accent-color:var(--ac)}
+.dist output{font:700 28px/1 var(--display);min-width:88px;text-align:right;font-variant-numeric:tabular-nums}
+.dist output small{font-size:15px;color:var(--mu);margin-left:2px}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.mini input{width:100%;height:40px;padding:0 10px;background:var(--chip);border:1px solid var(--line);border-radius:8px}
+.check{display:flex;align-items:center;gap:10px;font-size:14px;cursor:pointer}
+.check input{width:18px;height:18px;accent-color:var(--ac)}
+.btn{min-height:48px;border-radius:8px;border:0;background:var(--ac);color:var(--acT);font:700 18px/1 var(--display);letter-spacing:.04em;text-transform:uppercase;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;width:100%}
+.btn[aria-busy="true"]{opacity:.7;cursor:progress}
+.btn.ghost{background:transparent;color:var(--fg);border:1px solid var(--line);font:500 14px/1 var(--body);text-transform:none;letter-spacing:0;min-height:40px}
+.status{font-size:13px;color:var(--mu);min-height:1.2em}
+.status.err{color:var(--err)}
+.cards{display:flex;flex-direction:column;gap:10px}
+.card{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--c);border-radius:0 10px 10px 0;padding:12px 12px 10px;cursor:pointer;display:flex;flex-direction:column;gap:8px}
+.card[aria-selected="true"]{border-color:var(--c);background:#18191c}
+.card h3{margin:0;font:700 19px/1.1 var(--display);letter-spacing:.02em;display:flex;justify-content:space-between;gap:8px}
+.card h3 em{font-style:normal;font:500 12px/1.6 var(--body);color:var(--c);text-transform:uppercase;letter-spacing:.06em}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;font-variant-numeric:tabular-nums}
+.stats div{font:600 16px/1.1 var(--body)}
+.stats span{display:block;font:400 11px/1.3 var(--body);color:var(--mu);text-transform:uppercase;letter-spacing:.05em}
+.prof{width:100%;height:56px;display:block}
+.card .acts{display:flex;gap:8px}
+.card .acts button{flex:1;min-height:36px;border-radius:8px;border:1px solid var(--line);background:var(--chip);cursor:pointer;font-size:13px}
+.card .acts button.dl{background:var(--c);color:var(--acT);border-color:var(--c);font-weight:600}
+.empty{border:1px dashed var(--line);border-radius:10px;padding:16px;color:var(--mu);font-size:14px}
+.empty b{color:var(--fg);font-weight:500}
+.hide{display:none!important}
+.mk{width:18px;height:18px;border-radius:50%;border:3px solid var(--fg);background:var(--bg)}
+.mk.b{background:var(--fg);border-color:var(--bg);box-shadow:0 0 0 2px var(--fg)}
+.leaflet-container{background:#101012;font-family:var(--body)}
+.leaflet-control-attribution{background:rgba(11,11,12,.75)!important;color:var(--mu)!important}
+.leaflet-control-attribution a{color:var(--fg)!important}
+.leaflet-bar a{background:var(--panel)!important;color:var(--fg)!important;border-color:var(--line)!important}
+.foot{font-size:12px;color:var(--mu)}
+.foot a{color:var(--mu)}
+@media (max-width:820px){
+  .app{grid-template-columns:minmax(0,1fr);grid-template-rows:auto;height:auto}
+  .side{border-right:0;overflow:visible;order:2;padding-right:max(16px,env(safe-area-inset-right,0px))}
+  #map{order:1;height:48vh;min-height:300px;position:sticky;top:0;z-index:1}
+  html,body{height:auto}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <header><h1>Loop<span>r</span></h1><span class="tag">circuits run et vélo</span></header>
+
+    <section>
+      <div class="lbl">Sport</div>
+      <div class="seg" id="sport">
+        <button type="button" data-v="run" aria-pressed="true">Run</button>
+        <button type="button" data-v="bike" aria-pressed="false">Vélo</button>
+      </div>
+    </section>
+
+    <section>
+      <div class="lbl">Terrain</div>
+      <div class="seg" id="surface"></div>
+    </section>
+
+    <section>
+      <div class="lbl">Type de circuit</div>
+      <div class="seg" id="shape">
+        <button type="button" data-v="loop" aria-pressed="true">Boucle</button>
+        <button type="button" data-v="out" aria-pressed="false">Aller-retour</button>
+        <button type="button" data-v="ab" aria-pressed="false">A → B</button>
+      </div>
+    </section>
+
+    <section>
+      <div class="lbl"><span>Départ</span><span id="clickHint">ou clic sur la carte</span></div>
+      <form class="field" id="fA"><input id="qA" type="search" placeholder="Place Bellecour, Lyon" autocomplete="off"><button class="icobtn" aria-label="Rechercher le départ">⌕</button></form>
+      <ul class="results hide" id="rA"></ul>
+      <div class="pt" id="pA">Aucun point de départ</div>
+    </section>
+
+    <section id="secB" class="hide">
+      <div class="lbl"><span>Arrivée</span><span>2e clic sur la carte</span></div>
+      <form class="field" id="fB"><input id="qB" type="search" placeholder="Gare de Vienne" autocomplete="off"><button class="icobtn" aria-label="Rechercher l'arrivée">⌕</button></form>
+      <ul class="results hide" id="rB"></ul>
+      <div class="pt" id="pB">Aucun point d'arrivée</div>
+    </section>
+
+    <section>
+      <div class="lbl">Distance visée</div>
+      <div class="dist"><input id="dist" type="range" min="3" max="50" step="1" value="10" aria-label="Distance en kilomètres"><output id="distOut">10<small>km</small></output></div>
+    </section>
+
+    <section>
+      <div class="lbl">Dénivelé</div>
+      <div class="seg" id="elev">
+        <button type="button" data-v="flat" aria-pressed="false">Plat</button>
+        <button type="button" data-v="hilly" aria-pressed="true">Vallonné</button>
+        <button type="button" data-v="mount" aria-pressed="false">Montagne</button>
+        <button type="button" data-v="any" aria-pressed="false">Peu importe</button>
+      </div>
+    </section>
+
+    <section class="row2">
+      <label class="mini"><div class="lbl" id="paceLbl">Allure (min/km)</div><input id="pace" type="text" inputmode="decimal" value="5:30"></label>
+      <div style="display:flex;align-items:flex-end;padding-bottom:10px"><label class="check"><input id="calm" type="checkbox" checked> Éviter les grands axes</label></div>
+    </section>
+
+    <button class="btn" id="go" type="button">Générer les circuits</button>
+    <div class="status" id="status" role="status"></div>
+
+    <section>
+      <div class="lbl"><span>Propositions</span><span id="count"></span></div>
+      <div class="cards" id="cards">
+        <div class="empty"><b>Pose un départ</b> (adresse ou clic sur la carte), choisis la distance et le dénivelé, puis génère. Tu obtiens 3 circuits avec leur profil d'altitude, à exporter en GPX pour ta montre ou ton compteur.</div>
+      </div>
+      <button class="btn ghost hide" id="dlAll" type="button" style="margin-top:10px">Exporter les 3 en GPX</button>
+    </section>
+
+    <p class="foot">Itinéraires calculés par <a href="https://brouter.de" target="_blank" rel="noopener">BRouter</a> sur les données <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>. Recherche d'adresse via Nominatim.</p>
+  </aside>
+  <div id="map" aria-label="Carte"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(function(){
+const $=s=>document.querySelector(s);
+const COLORS=["#c6ff00","#00e0ff","#ff4d8d"];
+const SURF={
+  run:[{v:"road",t:"Route",p:["shortest"]},{v:"trail",t:"Trail",p:["hiking-mountain","shortest"]}],
+  bike:[{v:"road",t:"Route",p:["fastbike"],calm:["fastbike-lowtraffic","fastbike"]},{v:"gravel",t:"Gravel",p:["quaelnix-gravel","trekking"]},{v:"mtb",t:"VTT",p:["mtb-zossebart","trekking"]}]
+};
+const ELEV_TARGET={flat:0,hilly:12,mount:35};
+const S={sport:"run",surface:"road",shape:"loop",elev:"hilly",A:null,B:null,dist:10,pace:"5:30",speed:"25",calm:true,routes:[],sel:0};
+try{const s=JSON.parse(localStorage.getItem("loopr")||"{}");Object.assign(S,s,{routes:[],sel:0});}catch(e){}
+
+/* ---------- carte ---------- */
+const map=L.map("map",{zoomControl:true}).setView(S.A?[S.A.lat,S.A.lon]:[45.758,4.835],13);
+L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",{maxZoom:19,subdomains:"abcd",attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'}).addTo(map);
+const icon=c=>L.divIcon({className:"",html:`<div class="mk ${c||""}"></div>`,iconSize:[18,18],iconAnchor:[9,9]});
+let mA=null,mB=null,lines=[];
+map.on("click",e=>{
+  const p={lat:e.latlng.lat,lon:e.latlng.lng,name:fmtLL(e.latlng.lat,e.latlng.lng)};
+  if(S.shape==="ab"&&S.A&&!S.B)setPoint("B",p);else{setPoint("A",p);if(S.shape==="ab")setPoint("B",null);}
+});
+function fmtLL(a,b){return a.toFixed(5)+", "+b.toFixed(5)}
+function setPoint(k,p){
+  S[k]=p;
+  const m=k==="A"?mA:mB;if(m)map.removeLayer(m);
+  let nm=null;
+  if(p){nm=L.marker([p.lat,p.lon],{icon:icon(k==="B"?"b":""),draggable:true}).addTo(map);
+    nm.on("dragend",()=>{const ll=nm.getLatLng();S[k]={lat:ll.lat,lon:ll.lng,name:fmtLL(ll.lat,ll.lng)};$("#p"+k).innerHTML=label(k);save();});}
+  if(k==="A")mA=nm;else mB=nm;
+  $("#p"+k).innerHTML=label(k);save();
+}
+function label(k){const p=S[k];if(!p)return k==="A"?"Aucun point de départ":"Aucun point d'arrivée";return (k==="A"?"Départ : ":"Arrivée : ")+"<b>"+esc(p.name)+"</b>"}
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
+
+/* ---------- géocodage ---------- */
+async function geocode(q,k){
+  const box=$("#r"+k);box.innerHTML="";box.classList.add("hide");
+  if(!q.trim())return;
+  status("Recherche de l'adresse…");
+  try{
+    const r=await fetch("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&accept-language=fr&q="+encodeURIComponent(q));
+    const js=await r.json();
+    if(!js.length){status("Adresse introuvable. Essaie avec la ville, ou clique sur la carte.",true);return;}
+    status("");
+    js.forEach(x=>{const li=document.createElement("li");const b=document.createElement("button");b.type="button";b.textContent=x.display_name;
+      b.onclick=()=>{const p={lat:+x.lat,lon:+x.lon,name:x.display_name.split(",").slice(0,3).join(",")};setPoint(k,p);map.setView([p.lat,p.lon],14);box.classList.add("hide");};
+      li.appendChild(b);box.appendChild(li);});
+    box.classList.remove("hide");
+  }catch(e){status("La recherche d'adresse ne répond pas. Clique directement sur la carte.",true);}
+}
+$("#fA").onsubmit=e=>{e.preventDefault();geocode($("#qA").value,"A")};
+$("#fB").onsubmit=e=>{e.preventDefault();geocode($("#qB").value,"B")};
+
+/* ---------- réglages ---------- */
+function bindSeg(id,key,after){
+  const el=$("#"+id);
+  el.addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;S[key]=b.dataset.v;paint(el,S[key]);after&&after();save();});
+}
+function paint(el,v){el.querySelectorAll("button").forEach(b=>b.setAttribute("aria-pressed",b.dataset.v===v))}
+function renderSurface(){
+  const list=SURF[S.sport];if(!list.some(x=>x.v===S.surface))S.surface=list[0].v;
+  $("#surface").innerHTML=list.map(x=>`<button type="button" data-v="${x.v}" aria-pressed="${x.v===S.surface}">${x.t}</button>`).join("");
+}
+function renderSport(){
+  renderSurface();
+  const d=$("#dist");
+  if(S.sport==="run"){d.min=3;d.max=60;$("#paceLbl").textContent="Allure (min/km)";$("#pace").value=S.pace;}
+  else{d.min=10;d.max=200;$("#paceLbl").textContent="Vitesse moyenne (km/h)";$("#pace").value=S.speed;}
+  S.dist=Math.min(+d.max,Math.max(+d.min,S.dist));d.value=S.dist;showDist();
+}
+function showDist(){$("#distOut").innerHTML=S.dist+"<small>km</small>"}
+bindSeg("sport","sport",renderSport);
+bindSeg("surface","surface");
+bindSeg("shape","shape",()=>{$("#secB").classList.toggle("hide",S.shape!=="ab");if(S.shape!=="ab")setPoint("B",null);});
+bindSeg("elev","elev");
+$("#dist").oninput=e=>{S.dist=+e.target.value;showDist();save();};
+$("#pace").onchange=e=>{if(S.sport==="run")S.pace=e.target.value;else S.speed=e.target.value;save();refreshCards();};
+$("#calm").onchange=e=>{S.calm=e.target.checked;save();};
+function save(){try{const{routes,sel,...rest}=S;localStorage.setItem("loopr",JSON.stringify(rest));}catch(e){}}
+function status(t,err){const s=$("#status");s.textContent=t;s.classList.toggle("err",!!err)}
+
+/* ---------- géométrie ---------- */
+const R=6371;
+function dest(p,brg,km){const d=km/R,b=brg*Math.PI/180,la=p.lat*Math.PI/180,lo=p.lon*Math.PI/180;
+  const la2=Math.asin(Math.sin(la)*Math.cos(d)+Math.cos(la)*Math.sin(d)*Math.cos(b));
+  const lo2=lo+Math.atan2(Math.sin(b)*Math.sin(d)*Math.cos(la),Math.cos(d)-Math.sin(la)*Math.sin(la2));
+  return{lat:la2*180/Math.PI,lon:lo2*180/Math.PI};}
+function hav(a,b){const r=Math.PI/180,dl=(b.lat-a.lat)*r,dn=(b.lon-a.lon)*r;
+  const x=Math.sin(dl/2)**2+Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin(dn/2)**2;return 2*R*Math.asin(Math.sqrt(x));}
+function bearing(a,b){const r=Math.PI/180,y=Math.sin((b.lon-a.lon)*r)*Math.cos(b.lat*r),x=Math.cos(a.lat*r)*Math.sin(b.lat*r)-Math.sin(a.lat*r)*Math.cos(b.lat*r)*Math.cos((b.lon-a.lon)*r);return(Math.atan2(y,x)/r+360)%360;}
+
+/* ---------- routage BRouter ---------- */
+function profiles(){const s=SURF[S.sport].find(x=>x.v===S.surface);return(S.calm&&s.calm)?s.calm:s.p;}
+let goodProfile=null;
+async function route(pts,alt){
+  const ll=pts.map(p=>p.lon.toFixed(6)+","+p.lat.toFixed(6)).join("|");
+  const list=goodProfile?[goodProfile]:profiles();
+  let lastErr;
+  for(const prof of list){
+    try{
+      const r=await fetch(`https://brouter.de/brouter?lonlats=${ll}&profile=${prof}&alternativeidx=${alt||0}&format=geojson`);
+      const txt=await r.text();
+      if(!r.ok||txt[0]!=="{")throw new Error(txt.slice(0,140));
+      const f=JSON.parse(txt).features[0];goodProfile=prof;
+      const c=f.geometry.coordinates.map(x=>({lon:x[0],lat:x[1],ele:x[2]}));
+      return analyse(c);
+    }catch(e){lastErr=e;}
+  }
+  throw lastErr||new Error("routage impossible");
+}
+function analyse(c){
+  let d=0,up=0,dn=0;const cum=[0];
+  // lissage léger de l'altitude pour éviter de gonfler le D+
+  const el=c.map((p,i)=>{let s=0,n=0;for(let j=Math.max(0,i-2);j<=Math.min(c.length-1,i+2);j++)if(c[j].ele!=null){s+=c[j].ele;n++;}return n?s/n:null;});
+  for(let i=1;i<c.length;i++){d+=hav(c[i-1],c[i]);cum.push(d);
+    if(el[i]!=null&&el[i-1]!=null){const h=el[i]-el[i-1];if(h>0)up+=h;else dn-=h;}}
+  return{coords:c,ele:el,cum,km:d,up,dn};
+}
+
+/* ---------- génération des candidats ---------- */
+function candidatesPlan(){
+  const A=S.A,D=S.dist,k=1.3,base=Math.random()*360;
+  if(S.shape==="loop"){
+    const r=D/(2*Math.PI*k);
+    return Array.from({length:6},(_,i)=>{const th=base+i*60;const sk=i%2?0.75:1;
+      return{scale:1,build:f=>{const rr=r*f;const C=dest(A,th,rr);const back=(th+180)%360;
+        return[A,dest(C,back+100,rr),dest(C,th+(i%2?25:0),rr*sk),dest(C,back-100,rr),A];}};});
+  }
+  if(S.shape==="out"){
+    const L1=D/2/k;
+    return Array.from({length:6},(_,i)=>{const th=base+i*60;return{scale:1,build:f=>[A,dest(A,th,L1*f),A]};});
+  }
+  const B=S.B,d=hav(A,B),b=bearing(A,B),M=dest(A,b,d/2);
+  const need=D/(2*k),h=need>d/2?Math.sqrt(need*need-(d/2)**2):0;
+  const out=[];
+  if(h<0.3)for(let a=0;a<3;a++)out.push({alt:a,scale:1,build:()=>[A,B]});
+  else [1,-1].forEach(s=>[1,0.6].forEach(m=>out.push({scale:1,build:f=>[A,dest(M,b+90*s,h*m*f),B]})));
+  return out;
+}
+async function generate(){
+  if(!S.A){status("Pose d'abord un point de départ.",true);return;}
+  if(S.shape==="ab"&&!S.B){status("Pose un point d'arrivée pour un circuit A → B.",true);return;}
+  const btn=$("#go");btn.setAttribute("aria-busy","true");btn.disabled=true;goodProfile=null;
+  const plan=candidatesPlan(),got=[];let done=0;
+  status(`Calcul des itinéraires… 0/${plan.length}`);
+  const run=async c=>{
+    try{
+      let f=1,res=await route(c.build(f),c.alt);
+      const fixable=!(S.shape==="ab"&&c.alt!=null);
+      if(fixable&&Math.abs(res.km-S.dist)/S.dist>0.08){f=S.dist/res.km;res=await route(c.build(f),c.alt);}
+      got.push(res);
+    }catch(e){}
+    done++;status(`Calcul des itinéraires… ${done}/${plan.length}`);
+  };
+  for(let i=0;i<plan.length;i+=2)await Promise.all(plan.slice(i,i+2).map(run));
+  btn.removeAttribute("aria-busy");btn.disabled=false;
+  if(!got.length){status("Le serveur d'itinéraires n'a pas répondu. Réessaie dans un instant ou déplace le départ sur une route.",true);return;}
+  S.routes=pick(got);S.sel=0;
+  status(got.length<plan.length?`${S.routes.length} circuits trouvés (${plan.length-got.length} tracés impossibles ignorés).`:"");
+  draw();refreshCards();
+}
+function pick(arr){
+  const uniq=[];
+  arr.forEach(r=>{if(!uniq.some(u=>Math.abs(u.km-r.km)<0.15&&Math.abs(u.up-r.up)<8))uniq.push(r);});
+  const score=r=>{const rate=r.up/r.km,de=Math.abs(r.km-S.dist)/S.dist*40;
+    if(S.elev==="any")return de;return Math.abs(rate-ELEV_TARGET[S.elev])+de;};
+  return uniq.sort((a,b)=>score(a)-score(b)).slice(0,3);
+}
+
+/* ---------- rendu ---------- */
+function draw(){
+  lines.forEach(l=>map.removeLayer(l));lines=[];
+  const order=S.routes.map((_,i)=>i).filter(i=>i!==S.sel).concat(S.sel);
+  order.forEach(i=>{const r=S.routes[i],on=i===S.sel;
+    const pl=L.polyline(r.coords.map(p=>[p.lat,p.lon]),{color:COLORS[i],weight:on?5:3,opacity:on?1:.45}).addTo(map);
+    pl.on("click",ev=>{L.DomEvent.stopPropagation(ev);select(i);});lines.push(pl);});
+  if(S.routes.length){const b=L.latLngBounds([]);S.routes.forEach(r=>r.coords.forEach(p=>b.extend([p.lat,p.lon])));map.fitBounds(b,{padding:[24,24]});}
+}
+function select(i){S.sel=i;draw();refreshCards();}
+const NAMES={loop:["Boucle","Boucle","Boucle"],out:["Aller-retour","Aller-retour","Aller-retour"],ab:["Liaison","Liaison","Liaison"]};
+function dirName(r){const A=S.A;let far=r.coords[0],m=0;r.coords.forEach(p=>{const d=hav(A,p);if(d>m){m=d;far=p;}});
+  const b=bearing(A,far);return["nord","nord-est","est","sud-est","sud","sud-ouest","ouest","nord-ouest"][Math.round(b/45)%8];}
+function grade(r){const rate=r.up/r.km;return rate<6?"Plat":rate<18?"Vallonné":"Montagne";}
+function timeOf(r){
+  let h;
+  if(S.sport==="run"){const p=String(S.pace).split(/[:.,]/);const min=(+p[0]||5)+(+(p[1]||0))/60;h=(r.km+r.up/100)*min/60;}
+  else{const v=parseFloat(String(S.speed).replace(",","."))||25;h=r.km/v+r.up/600;}
+  const H=Math.floor(h),M=Math.round((h-H)*60);return H?`${H}h${String(M).padStart(2,"0")}`:`${M} min`;
+}
+function profileSVG(r,col){
+  const W=300,Hh=56,n=r.coords.length,step=Math.max(1,Math.floor(n/200));
+  const e=r.ele.filter(x=>x!=null);if(!e.length)return"";
+  const lo=Math.min(...e),hi=Math.max(...e),span=Math.max(20,hi-lo);
+  let d="";for(let i=0;i<n;i+=step){const x=r.cum[i]/r.km*W,y=Hh-4-((r.ele[i]??lo)-lo)/span*(Hh-14);d+=(d?"L":"M")+x.toFixed(1)+" "+y.toFixed(1);}
+  return`<svg class="prof" viewBox="0 0 ${W} ${Hh}" preserveAspectRatio="none" aria-label="Profil d'altitude de ${Math.round(lo)} à ${Math.round(hi)} m">
+  <path d="${d}L${W} ${Hh}L0 ${Hh}Z" fill="${col}" fill-opacity=".18"/><path d="${d}" fill="none" stroke="${col}" stroke-width="1.6" vector-effect="non-scaling-stroke"/>
+  <text x="2" y="10" fill="#8d8e93" font-size="10">${Math.round(hi)} m</text><text x="2" y="${Hh-2}" fill="#8d8e93" font-size="10">${Math.round(lo)} m</text></svg>`;
+}
+function refreshCards(){
+  const box=$("#cards");
+  if(!S.routes.length)return;
+  $("#count").textContent=S.routes.length+" / 3";
+  box.innerHTML=S.routes.map((r,i)=>{const kmE=S.sport==="run"?`<div>${(r.km+r.up/100).toFixed(1)}<span>km effort</span></div>`:`<div>${Math.round(r.dn)} m<span>D−</span></div>`;
+    return`<div class="card" style="--c:${COLORS[i]}" role="option" tabindex="0" aria-selected="${i===S.sel}" data-i="${i}">
+    <h3>${NAMES[S.shape][i]} ${S.shape==="ab"?"":"vers le "+dirName(r)}<em>${grade(r)}</em></h3>
+    <div class="stats"><div>${r.km.toFixed(1)}<span>km</span></div><div>${Math.round(r.up)} m<span>D+</span></div>${kmE}<div>${timeOf(r)}<span>estimé</span></div></div>
+    ${profileSVG(r,COLORS[i])}
+    <div class="acts"><button type="button" data-a="show" data-i="${i}">Voir sur la carte</button><button type="button" class="dl" data-a="gpx" data-i="${i}">Exporter GPX</button></div></div>`;}).join("");
+  $("#dlAll").classList.toggle("hide",S.routes.length<2);
+}
+$("#cards").addEventListener("click",e=>{const b=e.target.closest("button");const c=e.target.closest(".card");if(!c)return;const i=+c.dataset.i;
+  if(b&&b.dataset.a==="gpx"){gpx(i);return;}select(i);if(innerWidth<=820)$("#map").scrollIntoView({behavior:"smooth"});});
+$("#cards").addEventListener("keydown",e=>{if(e.key==="Enter"&&e.target.classList.contains("card"))select(+e.target.dataset.i)});
+
+/* ---------- export GPX ---------- */
+function gpxName(i){const r=S.routes[i];return`Loopr ${S.sport==="run"?"Run":"Vélo"} ${r.km.toFixed(1)}km D+${Math.round(r.up)}m ${String.fromCharCode(65+i)}`;}
+function gpx(i){
+  const r=S.routes[i],name=gpxName(i);
+  const pts=r.coords.map(p=>`<trkpt lat="${p.lat.toFixed(6)}" lon="${p.lon.toFixed(6)}">${p.ele!=null?`<ele>${p.ele.toFixed(1)}</ele>`:""}</trkpt>`).join("\n");
+  const xml=`<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Loopr" xmlns="http://www.topografix.com/GPX/1/1">
+<metadata><name>${esc(name)}</name><time>${new Date().toISOString()}</time></metadata>
+<trk><name>${esc(name)}</name><type>${S.sport==="run"?"running":"cycling"}</type><trkseg>
+${pts}
+</trkseg></trk></gpx>`;
+  const blob=new Blob([xml],{type:"application/gpx+xml"}),a=document.createElement("a");
+  a.href=URL.createObjectURL(blob);a.download=name.replace(/[^\w+.-]+/g,"_")+".gpx";document.body.appendChild(a);a.click();
+  setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1500);
+}
+$("#dlAll").onclick=()=>S.routes.forEach((_,i)=>setTimeout(()=>gpx(i),i*400));
+$("#go").onclick=generate;
+
+/* ---------- init ---------- */
+paint($("#sport"),S.sport);paint($("#shape"),S.shape);paint($("#elev"),S.elev);
+$("#calm").checked=S.calm;$("#secB").classList.toggle("hide",S.shape!=="ab");
+renderSport();
+if(S.A)setPoint("A",S.A);if(S.B&&S.shape==="ab")setPoint("B",S.B);
+})();
+</script>
+</body>
+</html>
