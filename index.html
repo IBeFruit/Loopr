@@ -369,10 +369,12 @@ const NAMES={loop:["Boucle","Boucle","Boucle"],out:["Aller-retour","Aller-retour
 function dirName(r){const A=S.A;let far=r.coords[0],m=0;r.coords.forEach(p=>{const d=hav(A,p);if(d>m){m=d;far=p;}});
   const b=bearing(A,far);return["nord","nord-est","est","sud-est","sud","sud-ouest","ouest","nord-ouest"][Math.round(b/45)%8];}
 function grade(r){const rate=r.up/r.km;return rate<6?"Plat":rate<18?"Vallonné":"Montagne";}
+function hoursOf(r){
+  if(S.sport==="run"){const p=String(S.pace).split(/[:.,]/);const min=(+p[0]||5)+(+(p[1]||0))/60;return(r.km+r.up/100)*min/60;}
+  const v=parseFloat(String(S.speed).replace(",","."))||25;return r.km/v+r.up/600;
+}
 function timeOf(r){
-  let h;
-  if(S.sport==="run"){const p=String(S.pace).split(/[:.,]/);const min=(+p[0]||5)+(+(p[1]||0))/60;h=(r.km+r.up/100)*min/60;}
-  else{const v=parseFloat(String(S.speed).replace(",","."))||25;h=r.km/v+r.up/600;}
+  const h=hoursOf(r);
   const H=Math.floor(h),M=Math.round((h-H)*60);return H?`${H}h${String(M).padStart(2,"0")}`:`${M} min`;
 }
 function profileSVG(r,col){
@@ -390,7 +392,7 @@ function refreshCards(){
   $("#count").textContent=S.routes.length+" / 3";
   box.innerHTML=S.routes.map((r,i)=>{const kmE=S.sport==="run"?`<div>${(r.km+r.up/100).toFixed(1)}<span>km effort</span></div>`:`<div>${Math.round(r.dn)} m<span>D−</span></div>`;
     return`<div class="card" style="--c:${COLORS[i]}" role="option" tabindex="0" aria-selected="${i===S.sel}" data-i="${i}">
-    <h3>${NAMES[S.shape][i]} ${S.shape==="ab"?"":"vers le "+dirName(r)}<em>${grade(r)}</em></h3>
+    <h3>${String.fromCharCode(65+i)} · ${NAMES[S.shape][i]} ${S.shape==="ab"?"":"vers le "+dirName(r)}<em>${grade(r)}</em></h3>
     <div class="stats"><div>${r.km.toFixed(1)}<span>km</span></div><div>${Math.round(r.up)} m<span>D+</span></div>${kmE}<div>${timeOf(r)}<span>estimé</span></div></div>
     ${profileSVG(r,COLORS[i])}
     <div class="acts"><button type="button" data-a="show" data-i="${i}">Voir sur la carte</button><button type="button" class="dl" data-a="gpx" data-i="${i}">Exporter GPX</button></div></div>`;}).join("");
@@ -404,7 +406,9 @@ $("#cards").addEventListener("keydown",e=>{if(e.key==="Enter"&&e.target.classLis
 function gpxName(i){const r=S.routes[i];return`Loopr ${S.sport==="run"?"Run":"Vélo"} ${r.km.toFixed(1)}km D+${Math.round(r.up)}m ${String.fromCharCode(65+i)}`;}
 function gpx(i){
   const r=S.routes[i],name=gpxName(i);
-  const pts=r.coords.map(p=>`<trkpt lat="${p.lat.toFixed(6)}" lon="${p.lon.toFixed(6)}">${p.ele!=null?`<ele>${p.ele.toFixed(1)}</ele>`:""}</trkpt>`).join("\n");
+  // horodatage fictif à vitesse constante (temps estimé) : Garmin et d'autres en ont besoin pour calculer la distance
+  const t0=Date.now(),totalMs=hoursOf(r)*3600000;
+  const pts=r.coords.map((p,k)=>`<trkpt lat="${p.lat.toFixed(6)}" lon="${p.lon.toFixed(6)}">${r.ele[k]!=null?`<ele>${r.ele[k].toFixed(1)}</ele>`:""}<time>${new Date(t0+r.cum[k]/r.km*totalMs).toISOString().replace(/\.\d+Z$/,"Z")}</time></trkpt>`).join("\n");
   const xml=`<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="Loopr" xmlns="http://www.topografix.com/GPX/1/1">
 <metadata><name>${esc(name)}</name><time>${new Date().toISOString()}</time></metadata>
