@@ -74,6 +74,13 @@ h1 span{color:var(--ac)}
 .hide{display:none!important}
 .mk{width:18px;height:18px;border-radius:50%;border:3px solid var(--fg);background:var(--bg)}
 .mk.b{background:var(--fg);border-color:var(--bg);box-shadow:0 0 0 2px var(--fg)}
+.mk.v{border-radius:4px;transform:rotate(45deg);background:var(--ac);border-color:var(--bg);box-shadow:0 0 0 2px var(--ac)}
+.opt{font-style:normal;text-transform:none;letter-spacing:0;color:var(--mu);opacity:.8}
+.linkbtn{background:none;border:0;padding:0;color:var(--ac);font:500 12px/1 var(--body);cursor:pointer;text-transform:none;letter-spacing:0}
+.linkbtn[aria-pressed="true"]{text-decoration:underline}
+.pt .x{margin-left:8px}
+.sub{font-size:12px;color:var(--mu);font-variant-numeric:tabular-nums;margin-top:-2px}
+.sub b{color:var(--fg);font-weight:500}
 .leaflet-container{background:#101012;font-family:var(--body)}
 .leaflet-control-attribution{background:rgba(11,11,12,.75)!important;color:var(--mu)!important}
 .leaflet-control-attribution a{color:var(--fg)!important}
@@ -125,6 +132,13 @@ h1 span{color:var(--ac)}
       <div class="pt" id="pA">Aucun point de départ</div>
     </section>
 
+    <section>
+      <div class="lbl"><span>Point de passage <i class="opt">facultatif</i></span><button type="button" class="linkbtn" id="placeV">Placer sur la carte</button></div>
+      <form class="field" id="fV"><input id="qV" type="search" placeholder="Pont de Réalville" autocomplete="off"><button class="icobtn" aria-label="Rechercher le point de passage">⌕</button></form>
+      <ul class="results hide" id="rV"></ul>
+      <div class="pt" id="pV">Aucun point de passage. La distance se compte depuis le départ.</div>
+    </section>
+
     <section id="secB" class="hide">
       <div class="lbl"><span>Arrivée</span><span>2e clic sur la carte</span></div>
       <form class="field" id="fB"><input id="qB" type="search" placeholder="Gare de Vienne" autocomplete="off"><button class="icobtn" aria-label="Rechercher l'arrivée">⌕</button></form>
@@ -133,7 +147,7 @@ h1 span{color:var(--ac)}
     </section>
 
     <section>
-      <div class="lbl">Distance visée</div>
+      <div class="lbl" id="distLbl">Distance visée</div>
       <div class="dist"><input id="dist" type="range" min="3" max="50" step="1" value="10" aria-label="Distance en kilomètres"><output id="distOut">10<small>km</small></output></div>
     </section>
 
@@ -178,7 +192,7 @@ const SURF={
   bike:[{v:"road",t:"Route",p:["fastbike"],calm:["fastbike-lowtraffic","fastbike"]},{v:"gravel",t:"Gravel",p:["quaelnix-gravel","trekking"]},{v:"mtb",t:"VTT",p:["mtb-zossebart","trekking"]}]
 };
 const ELEV_TARGET={flat:0,hilly:12,mount:35};
-const S={sport:"run",surface:"road",shape:"loop",elev:"hilly",A:null,B:null,dist:10,pace:"5:30",speed:"25",calm:true,routes:[],sel:0};
+const S={sport:"run",surface:"road",shape:"loop",elev:"hilly",A:null,B:null,V:null,dist:10,pace:"5:30",speed:"25",calm:true,routes:[],sel:0};
 try{const s=JSON.parse(localStorage.getItem("loopr")||"{}");Object.assign(S,s,{routes:[],sel:0});}catch(e){}
 
 /* ---------- carte ---------- */
@@ -192,22 +206,29 @@ const bases={
 bases["Sombre"].addTo(map);
 L.control.layers(bases,null,{position:"topright"}).addTo(map);
 const icon=c=>L.divIcon({className:"",html:`<div class="mk ${c||""}"></div>`,iconSize:[18,18],iconAnchor:[9,9]});
-let mA=null,mB=null,lines=[];
+const MK={A:null,B:null,V:null};let lines=[],clickTarget=null;
 map.on("click",e=>{
   const p={lat:e.latlng.lat,lon:e.latlng.lng,name:fmtLL(e.latlng.lat,e.latlng.lng)};
+  if(clickTarget==="V"){setPoint("V",p);armV(false);return;}
   if(S.shape==="ab"&&S.A&&!S.B)setPoint("B",p);else{setPoint("A",p);if(S.shape==="ab")setPoint("B",null);}
 });
+function armV(on){clickTarget=on?"V":null;$("#placeV").setAttribute("aria-pressed",on);$("#placeV").textContent=on?"Touche la carte…":"Placer sur la carte";}
+$("#placeV").onclick=()=>{armV(clickTarget!=="V");if(clickTarget&&innerWidth<=820)$("#map").scrollIntoView({behavior:"smooth"});};
 function fmtLL(a,b){return a.toFixed(5)+", "+b.toFixed(5)}
 function setPoint(k,p){
   S[k]=p;
-  const m=k==="A"?mA:mB;if(m)map.removeLayer(m);
-  let nm=null;
-  if(p){nm=L.marker([p.lat,p.lon],{icon:icon(k==="B"?"b":""),draggable:true}).addTo(map);
-    nm.on("dragend",()=>{const ll=nm.getLatLng();S[k]={lat:ll.lat,lon:ll.lng,name:fmtLL(ll.lat,ll.lng)};$("#p"+k).innerHTML=label(k);save();});}
-  if(k==="A")mA=nm;else mB=nm;
-  $("#p"+k).innerHTML=label(k);save();
+  if(MK[k])map.removeLayer(MK[k]);MK[k]=null;
+  if(p){const nm=L.marker([p.lat,p.lon],{icon:icon(k==="B"?"b":k==="V"?"v":""),draggable:true}).addTo(map);
+    nm.on("dragend",()=>{const ll=nm.getLatLng();S[k]={lat:ll.lat,lon:ll.lng,name:fmtLL(ll.lat,ll.lng)};$("#p"+k).innerHTML=label(k);save();});MK[k]=nm;}
+  $("#p"+k).innerHTML=label(k);
+  if(k==="V"){$("#distLbl").textContent=p?"Distance à partir du point de passage":"Distance visée";}
+  save();
 }
-function label(k){const p=S[k];if(!p)return k==="A"?"Aucun point de départ":"Aucun point d'arrivée";return (k==="A"?"Départ : ":"Arrivée : ")+"<b>"+esc(p.name)+"</b>"}
+function label(k){const p=S[k];
+  if(!p)return{A:"Aucun point de départ",B:"Aucun point d'arrivée",V:"Aucun point de passage. La distance se compte depuis le départ."}[k];
+  const h={A:"Départ : ",B:"Arrivée : ",V:"Passage : "}[k]+"<b>"+esc(p.name)+"</b>";
+  return k==="V"?h+'<button type="button" class="linkbtn x" id="rmV">Retirer</button>':h;}
+$("#pV").addEventListener("click",e=>{if(e.target.id==="rmV")setPoint("V",null);});
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
 
 /* ---------- géocodage ---------- */
@@ -228,6 +249,7 @@ async function geocode(q,k){
 }
 $("#fA").onsubmit=e=>{e.preventDefault();geocode($("#qA").value,"A")};
 $("#fB").onsubmit=e=>{e.preventDefault();geocode($("#qB").value,"B")};
+$("#fV").onsubmit=e=>{e.preventDefault();geocode($("#qV").value,"V")};
 
 /* ---------- réglages ---------- */
 function bindSeg(id,key,after){
@@ -306,19 +328,21 @@ function analyse(c){
 }
 
 /* ---------- génération des candidats ---------- */
+/* Avec un point de passage V : approche A → V non comptée, puis le circuit compté part de V
+   (boucle : V → … → A ; aller-retour : V → P → V → A ; A→B : V → … → B) */
 function candidatesPlan(){
-  const A=S.A,D=S.dist,k=1.3,base=Math.random()*360;
+  const V=S.V,O=V||S.A,End=S.A,D=S.dist,k=1.3,base=Math.random()*360;
   if(S.shape==="loop"){
     const r=D/(2*Math.PI*k);
     return Array.from({length:6},(_,i)=>{const th=base+i*60;const sk=i%2?0.75:1;
-      return{scale:1,build:f=>{const rr=r*f;const C=dest(A,th,rr);const back=(th+180)%360;
-        return[A,dest(C,back+100,rr),dest(C,th+(i%2?25:0),rr*sk),dest(C,back-100,rr),A];}};});
+      return{scale:1,build:f=>{const rr=r*f;const C=dest(O,th,rr);const back=(th+180)%360;
+        return[O,dest(C,back+100,rr),dest(C,th+(i%2?25:0),rr*sk),dest(C,back-100,rr),End];}};});
   }
   if(S.shape==="out"){
-    const L1=D/2/k;
-    return Array.from({length:6},(_,i)=>{const th=base+i*60;return{scale:1,build:f=>[A,dest(A,th,L1*f),A]};});
+    const L1=Math.max(0.5,(D-(V?k*hav(V,End):0))/2/k);
+    return Array.from({length:6},(_,i)=>{const th=base+i*60;return{scale:1,build:f=>V?[V,dest(V,th,L1*f),V,End]:[O,dest(O,th,L1*f),O]};});
   }
-  const B=S.B,d=hav(A,B),b=bearing(A,B),M=dest(A,b,d/2);
+  const A=O,B=S.B,d=hav(A,B),b=bearing(A,B),M=dest(A,b,d/2);
   const need=D/(2*k),h=need>d/2?Math.sqrt(need*need-(d/2)**2):0;
   const out=[];
   if(h<0.3)for(let a=0;a<3;a++)out.push({alt:a,scale:1,build:()=>[A,B]});
@@ -329,6 +353,12 @@ async function generate(){
   if(!S.A){status("Pose d'abord un point de départ.",true);return;}
   if(S.shape==="ab"&&!S.B){status("Pose un point d'arrivée pour un circuit A → B.",true);return;}
   const btn=$("#go");btn.setAttribute("aria-busy","true");btn.disabled=true;goodProfile=null;
+  let app=null;
+  if(S.V){
+    status("Calcul de l'approche jusqu'au point de passage…");
+    try{app=await route([S.A,S.V]);}
+    catch(e){btn.removeAttribute("aria-busy");btn.disabled=false;status("Impossible de rejoindre le point de passage. Déplace-le sur une route ou un chemin.",true);return;}
+  }
   const plan=candidatesPlan(),got=[];let done=0;
   status(`Calcul des itinéraires… 0/${plan.length}`);
   const run=async c=>{
@@ -336,7 +366,7 @@ async function generate(){
       let f=1,res=await route(c.build(f),c.alt);
       const fixable=!(S.shape==="ab"&&c.alt!=null);
       if(fixable&&Math.abs(res.km-S.dist)/S.dist>0.08){f=S.dist/res.km;res=await route(c.build(f),c.alt);}
-      got.push(res);
+      got.push(combine(app,res));
     }catch(e){}
     done++;status(`Calcul des itinéraires… ${done}/${plan.length}`);
   };
@@ -347,10 +377,16 @@ async function generate(){
   status(got.length<plan.length?`${S.routes.length} circuits trouvés (${plan.length-got.length} tracés impossibles ignorés).`:"");
   draw();refreshCards();
 }
+/* assemble approche + circuit ; km2/up2/dn2 = partie comptée (depuis le passage) */
+function combine(app,c){
+  if(!app)return Object.assign(c,{km2:c.km,up2:c.up,dn2:c.dn,appKm:0,appUp:0,viaIdx:-1});
+  const r=analyse(app.coords.concat(c.coords.slice(1)));
+  return Object.assign(r,{km2:c.km,up2:c.up,dn2:c.dn,appKm:app.km,appUp:app.up,viaIdx:app.coords.length-1});
+}
 function pick(arr){
   const uniq=[];
-  arr.forEach(r=>{if(!uniq.some(u=>Math.abs(u.km-r.km)<0.15&&Math.abs(u.up-r.up)<8))uniq.push(r);});
-  const score=r=>{const rate=r.up/r.km,de=Math.abs(r.km-S.dist)/S.dist*40;
+  arr.forEach(r=>{if(!uniq.some(u=>Math.abs(u.km2-r.km2)<0.15&&Math.abs(u.up2-r.up2)<8))uniq.push(r);});
+  const score=r=>{const rate=r.up2/r.km2,de=Math.abs(r.km2-S.dist)/S.dist*40;
     if(S.elev==="any")return de;return Math.abs(rate-ELEV_TARGET[S.elev])+de;};
   return uniq.sort((a,b)=>score(a)-score(b)).slice(0,3);
 }
@@ -366,23 +402,23 @@ function draw(){
 }
 function select(i){S.sel=i;draw();refreshCards();}
 const NAMES={loop:["Boucle","Boucle","Boucle"],out:["Aller-retour","Aller-retour","Aller-retour"],ab:["Liaison","Liaison","Liaison"]};
-function dirName(r){const A=S.A;let far=r.coords[0],m=0;r.coords.forEach(p=>{const d=hav(A,p);if(d>m){m=d;far=p;}});
-  const b=bearing(A,far);return["nord","nord-est","est","sud-est","sud","sud-ouest","ouest","nord-ouest"][Math.round(b/45)%8];}
-function grade(r){const rate=r.up/r.km;return rate<6?"Plat":rate<18?"Vallonné":"Montagne";}
-function hoursOf(r){
-  if(S.sport==="run"){const p=String(S.pace).split(/[:.,]/);const min=(+p[0]||5)+(+(p[1]||0))/60;return(r.km+r.up/100)*min/60;}
-  const v=parseFloat(String(S.speed).replace(",","."))||25;return r.km/v+r.up/600;
+function dirName(r){const O=S.V||S.A,from=Math.max(0,r.viaIdx);let far=r.coords[from],m=0;
+  for(let i=from;i<r.coords.length;i++){const d=hav(O,r.coords[i]);if(d>m){m=d;far=r.coords[i];}}
+  const b=bearing(O,far);return["nord","nord-est","est","sud-est","sud","sud-ouest","ouest","nord-ouest"][Math.round(b/45)%8];}
+function grade(r){const rate=r.up2/r.km2;return rate<6?"Plat":rate<18?"Vallonné":"Montagne";}
+function hoursOf(km,up){
+  if(S.sport==="run"){const p=String(S.pace).split(/[:.,]/);const min=(+p[0]||5)+(+(p[1]||0))/60;return(km+up/100)*min/60;}
+  const v=parseFloat(String(S.speed).replace(",","."))||25;return km/v+up/600;
 }
-function timeOf(r){
-  const h=hoursOf(r);
-  const H=Math.floor(h),M=Math.round((h-H)*60);return H?`${H}h${String(M).padStart(2,"0")}`:`${M} min`;
-}
+function fmtH(h){const H=Math.floor(h),M=Math.round((h-H)*60);return H?`${H}h${String(M).padStart(2,"0")}`:`${M} min`;}
+function timeOf(r){return fmtH(hoursOf(r.km2,r.up2));}
 function profileSVG(r,col){
   const W=300,Hh=56,n=r.coords.length,step=Math.max(1,Math.floor(n/200));
   const e=r.ele.filter(x=>x!=null);if(!e.length)return"";
   const lo=Math.min(...e),hi=Math.max(...e),span=Math.max(20,hi-lo);
   let d="";for(let i=0;i<n;i+=step){const x=r.cum[i]/r.km*W,y=Hh-4-((r.ele[i]??lo)-lo)/span*(Hh-14);d+=(d?"L":"M")+x.toFixed(1)+" "+y.toFixed(1);}
   return`<svg class="prof" viewBox="0 0 ${W} ${Hh}" preserveAspectRatio="none" aria-label="Profil d'altitude de ${Math.round(lo)} à ${Math.round(hi)} m">
+  ${r.viaIdx>0?`<rect x="0" y="0" width="${(r.cum[r.viaIdx]/r.km*W).toFixed(1)}" height="${Hh}" fill="#8d8e93" fill-opacity=".12"/><line x1="${(r.cum[r.viaIdx]/r.km*W).toFixed(1)}" x2="${(r.cum[r.viaIdx]/r.km*W).toFixed(1)}" y1="0" y2="${Hh}" stroke="#c6ff00" stroke-dasharray="3 3" vector-effect="non-scaling-stroke"/>`:""}
   <path d="${d}L${W} ${Hh}L0 ${Hh}Z" fill="${col}" fill-opacity=".18"/><path d="${d}" fill="none" stroke="${col}" stroke-width="1.6" vector-effect="non-scaling-stroke"/>
   <text x="2" y="10" fill="#8d8e93" font-size="10">${Math.round(hi)} m</text><text x="2" y="${Hh-2}" fill="#8d8e93" font-size="10">${Math.round(lo)} m</text></svg>`;
 }
@@ -390,10 +426,12 @@ function refreshCards(){
   const box=$("#cards");
   if(!S.routes.length)return;
   $("#count").textContent=S.routes.length+" / 3";
-  box.innerHTML=S.routes.map((r,i)=>{const kmE=S.sport==="run"?`<div>${(r.km+r.up/100).toFixed(1)}<span>km effort</span></div>`:`<div>${Math.round(r.dn)} m<span>D−</span></div>`;
+  box.innerHTML=S.routes.map((r,i)=>{const kmE=S.sport==="run"?`<div>${(r.km2+r.up2/100).toFixed(1)}<span>km effort</span></div>`:`<div>${Math.round(r.dn2)} m<span>D−</span></div>`;
+    const via=r.appKm>0;
     return`<div class="card" style="--c:${COLORS[i]}" role="option" tabindex="0" aria-selected="${i===S.sel}" data-i="${i}">
     <h3>${String.fromCharCode(65+i)} · ${NAMES[S.shape][i]} ${S.shape==="ab"?"":"vers le "+dirName(r)}<em>${grade(r)}</em></h3>
-    <div class="stats"><div>${r.km.toFixed(1)}<span>km</span></div><div>${Math.round(r.up)} m<span>D+</span></div>${kmE}<div>${timeOf(r)}<span>estimé</span></div></div>
+    <div class="stats"><div>${r.km2.toFixed(1)}<span>${via?"km dès passage":"km"}</span></div><div>${Math.round(r.up2)} m<span>D+</span></div>${kmE}<div>${timeOf(r)}<span>estimé</span></div></div>
+    ${via?`<div class="sub">Approche <b>${r.appKm.toFixed(1)} km</b> · D+ ${Math.round(r.appUp)} m &nbsp;|&nbsp; Total <b>${r.km.toFixed(1)} km</b> · D+ ${Math.round(r.up)} m · ${fmtH(hoursOf(r.km,r.up))}</div>`:""}
     ${profileSVG(r,COLORS[i])}
     <div class="acts"><button type="button" data-a="show" data-i="${i}">Voir sur la carte</button><button type="button" class="dl" data-a="gpx" data-i="${i}">Exporter GPX</button></div></div>`;}).join("");
   $("#dlAll").classList.toggle("hide",S.routes.length<2);
@@ -403,16 +441,17 @@ $("#cards").addEventListener("click",e=>{const b=e.target.closest("button");cons
 $("#cards").addEventListener("keydown",e=>{if(e.key==="Enter"&&e.target.classList.contains("card"))select(+e.target.dataset.i)});
 
 /* ---------- export GPX ---------- */
-function gpxName(i){const r=S.routes[i];return`Loopr ${S.sport==="run"?"Run":"Vélo"} ${r.km.toFixed(1)}km D+${Math.round(r.up)}m ${String.fromCharCode(65+i)}`;}
+function gpxName(i){const r=S.routes[i];return`Loopr ${S.sport==="run"?"Run":"Vélo"} ${r.km2.toFixed(1)}km D+${Math.round(r.up2)}m${r.appKm>0?" (+"+r.appKm.toFixed(1)+"km approche)":""} ${String.fromCharCode(65+i)}`;}
 function gpx(i){
   const r=S.routes[i],name=gpxName(i);
   // horodatage fictif à vitesse constante (temps estimé) : Garmin et d'autres en ont besoin pour calculer la distance
-  const t0=Date.now(),totalMs=hoursOf(r)*3600000;
+  const t0=Date.now(),totalMs=hoursOf(r.km,r.up)*3600000;
+  const wpt=r.viaIdx>0?`<wpt lat="${r.coords[r.viaIdx].lat.toFixed(6)}" lon="${r.coords[r.viaIdx].lon.toFixed(6)}"><name>Point de passage</name><desc>${esc(S.V?S.V.name:"")} — début des ${r.km2.toFixed(1)} km</desc></wpt>\n`:"";
   const pts=r.coords.map((p,k)=>`<trkpt lat="${p.lat.toFixed(6)}" lon="${p.lon.toFixed(6)}">${r.ele[k]!=null?`<ele>${r.ele[k].toFixed(1)}</ele>`:""}<time>${new Date(t0+r.cum[k]/r.km*totalMs).toISOString().replace(/\.\d+Z$/,"Z")}</time></trkpt>`).join("\n");
   const xml=`<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="Loopr" xmlns="http://www.topografix.com/GPX/1/1">
 <metadata><name>${esc(name)}</name><time>${new Date().toISOString()}</time></metadata>
-<trk><name>${esc(name)}</name><type>${S.sport==="run"?"running":"cycling"}</type><trkseg>
+${wpt}<trk><name>${esc(name)}</name><type>${S.sport==="run"?"running":"cycling"}</type><trkseg>
 ${pts}
 </trkseg></trk></gpx>`;
   const blob=new Blob([xml],{type:"application/gpx+xml"}),a=document.createElement("a");
@@ -426,7 +465,7 @@ $("#go").onclick=generate;
 paint($("#sport"),S.sport);paint($("#shape"),S.shape);paint($("#elev"),S.elev);
 $("#calm").checked=S.calm;$("#secB").classList.toggle("hide",S.shape!=="ab");
 renderSport();
-if(S.A)setPoint("A",S.A);if(S.B&&S.shape==="ab")setPoint("B",S.B);
+if(S.A)setPoint("A",S.A);if(S.B&&S.shape==="ab")setPoint("B",S.B);if(S.V)setPoint("V",S.V);
 })();
 </script>
 </body>
