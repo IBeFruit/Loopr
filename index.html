@@ -226,6 +226,7 @@ function setPoint(k,p){
 }
 function label(k){const p=S[k];
   if(!p)return{A:"Aucun point de départ",B:"Aucun point d'arrivée",V:"Aucun point de passage. La distance se compte depuis le départ."}[k];
+  if(k==="V")return"Passage : <b>"+esc(p.name)+'</b><button type="button" class="linkbtn x" id="rmV">Retirer</button><div class="pt" style="margin-top:4px">'+(S.shape==="ab"?"Départ → passage → circuit compté → arrivée":"Départ → passage → circuit compté → passage → retour au départ")+'</div>';
   const h={A:"Départ : ",B:"Arrivée : ",V:"Passage : "}[k]+"<b>"+esc(p.name)+"</b>";
   return k==="V"?h+'<button type="button" class="linkbtn x" id="rmV">Retirer</button>':h;}
 $("#pV").addEventListener("click",e=>{if(e.target.id==="rmV")setPoint("V",null);});
@@ -292,20 +293,26 @@ function bearing(a,b){const r=Math.PI/180,y=Math.sin((b.lon-a.lon)*r)*Math.cos(b
 /* ---------- routage BRouter ---------- */
 function profiles(){const s=SURF[S.sport].find(x=>x.v===S.surface);return(S.calm&&s.calm)?s.calm:s.p;}
 let goodProfile=null;
-async function route(pts,alt){
+const wait=ms=>new Promise(r=>setTimeout(r,ms));
+async function route(pts,alt,opt){
+  opt=opt||{};
   const ll=pts.map(p=>p.lon.toFixed(6)+","+p.lat.toFixed(6)).join("|");
-  const list=goodProfile?[goodProfile]:profiles();
+  let list=goodProfile?[goodProfile]:profiles();
+  if(opt.robust)list=[...new Set([...list,...profiles(),"trekking"])];
   let lastErr;
-  for(const prof of list){
-    try{
-      const r=await fetch(`https://brouter.de/brouter?lonlats=${ll}&profile=${prof}&alternativeidx=${alt||0}&format=geojson`);
-      const txt=await r.text();
-      if(!r.ok||txt[0]!=="{")throw new Error(txt.slice(0,140));
-      const f=JSON.parse(txt).features[0];goodProfile=prof;
-      let c=f.geometry.coordinates.map(x=>({lon:x[0],lat:x[1],ele:x[2]}));
-      if(S.shape!=="out")c=cutSpurs(c);
-      return analyse(c);
-    }catch(e){lastErr=e;}
+  for(let attempt=0;attempt<(opt.robust?2:1);attempt++){
+    if(attempt)await wait(1500);
+    for(const prof of list){
+      try{
+        const r=await fetch(`https://brouter.de/brouter?lonlats=${ll}&profile=${prof}&alternativeidx=${alt||0}&format=geojson`);
+        const txt=await r.text();
+        if(!r.ok||txt[0]!=="{")throw new Error(txt.slice(0,160));
+        const f=JSON.parse(txt).features[0];if(!opt.robust)goodProfile=prof;
+        let c=f.geometry.coordinates.map(x=>({lon:x[0],lat:x[1],ele:x[2]}));
+        if(!opt.keepSpurs)c=cutSpurs(c);
+        return analyse(c);
+      }catch(e){lastErr=e;}
+    }
   }
   throw lastErr||new Error("routage impossible");
 }
@@ -328,19 +335,20 @@ function analyse(c){
 }
 
 /* ---------- génération des candidats ---------- */
-/* Avec un point de passage V : approche A → V non comptée, puis le circuit compté part de V
-   (boucle : V → … → A ; aller-retour : V → P → V → A ; A→B : V → … → B) */
+/* Avec un point de passage V (chez un copain) :
+   départ A → V (approche, non comptée) → circuit compté qui part de V et revient à V → V → A (retour, non compté).
+   En A → B : A → V (approche) puis circuit compté V → … → B. */
 function candidatesPlan(){
-  const V=S.V,O=V||S.A,End=S.A,D=S.dist,k=1.3,base=Math.random()*360;
+  const O=S.V||S.A,D=S.dist,k=1.3,base=Math.random()*360;
   if(S.shape==="loop"){
     const r=D/(2*Math.PI*k);
     return Array.from({length:6},(_,i)=>{const th=base+i*60;const sk=i%2?0.75:1;
       return{scale:1,build:f=>{const rr=r*f;const C=dest(O,th,rr);const back=(th+180)%360;
-        return[O,dest(C,back+100,rr),dest(C,th+(i%2?25:0),rr*sk),dest(C,back-100,rr),End];}};});
+        return[O,dest(C,back+100,rr),dest(C,th+(i%2?25:0),rr*sk),dest(C,back-100,rr),O];}};});
   }
   if(S.shape==="out"){
-    const L1=Math.max(0.5,(D-(V?k*hav(V,End):0))/2/k);
-    return Array.from({length:6},(_,i)=>{const th=base+i*60;return{scale:1,build:f=>V?[V,dest(V,th,L1*f),V,End]:[O,dest(O,th,L1*f),O]};});
+    const L1=D/2/k;
+    return Array.from({length:6},(_,i)=>{const th=base+i*60;return{scale:1,build:f=>[O,dest(O,th,L1*f),O]};});
   }
   const A=O,B=S.B,d=hav(A,B),b=bearing(A,B),M=dest(A,b,d/2);
   const need=D/(2*k),h=need>d/2?Math.sqrt(need*need-(d/2)**2):0;
@@ -353,20 +361,33 @@ async function generate(){
   if(!S.A){status("Pose d'abord un point de départ.",true);return;}
   if(S.shape==="ab"&&!S.B){status("Pose un point d'arrivée pour un circuit A → B.",true);return;}
   const btn=$("#go");btn.setAttribute("aria-busy","true");btn.disabled=true;goodProfile=null;
-  let app=null;
+  let app=null,ret=null;
+  S.routes=[];lines.forEach(l=>map.removeLayer(l));lines=[];
   if(S.V){
-    status("Calcul de l'approche jusqu'au point de passage…");
-    try{app=await route([S.A,S.V]);}
-    catch(e){btn.removeAttribute("aria-busy");btn.disabled=false;status("Impossible de rejoindre le point de passage. Déplace-le sur une route ou un chemin.",true);return;}
+    status("Calcul du trajet jusqu'au point de passage…");
+    try{
+      app=await route([S.A,S.V],0,{robust:true,keepSpurs:true});
+      if(S.shape!=="ab"){
+        status("Calcul du retour depuis le point de passage…");
+        try{ret=await route([S.V,S.A],0,{robust:true,keepSpurs:true});}
+        catch(e){ret=analyse(app.coords.slice().reverse());}
+      }
+    }catch(e){
+      btn.removeAttribute("aria-busy");btn.disabled=false;
+      const why=/not mapped|no.*way|position/i.test(e.message)?"Le point de passage est trop loin d'une route : déplace le losange sur la route la plus proche.":"Le serveur d'itinéraires n'a pas répondu. Réessaie dans quelques secondes.";
+      status("Impossible de calculer le trajet jusqu'au point de passage. "+why+" ("+e.message.slice(0,80)+")",true);
+      $("#cards").innerHTML='<div class="empty">Aucun circuit pour l\'instant.</div>';$("#count").textContent="";$("#dlAll").classList.add("hide");
+      return;
+    }
   }
   const plan=candidatesPlan(),got=[];let done=0;
   status(`Calcul des itinéraires… 0/${plan.length}`);
   const run=async c=>{
     try{
-      let f=1,res=await route(c.build(f),c.alt);
+      let f=1,res=await route(c.build(f),c.alt,{keepSpurs:S.shape==="out"});
       const fixable=!(S.shape==="ab"&&c.alt!=null);
-      if(fixable&&Math.abs(res.km-S.dist)/S.dist>0.08){f=S.dist/res.km;res=await route(c.build(f),c.alt);}
-      got.push(combine(app,res));
+      if(fixable&&Math.abs(res.km-S.dist)/S.dist>0.08){f=S.dist/res.km;res=await route(c.build(f),c.alt,{keepSpurs:S.shape==="out"});}
+      got.push(combine(app,res,ret));
     }catch(e){}
     done++;status(`Calcul des itinéraires… ${done}/${plan.length}`);
   };
@@ -378,10 +399,12 @@ async function generate(){
   draw();refreshCards();
 }
 /* assemble approche + circuit ; km2/up2/dn2 = partie comptée (depuis le passage) */
-function combine(app,c){
-  if(!app)return Object.assign(c,{km2:c.km,up2:c.up,dn2:c.dn,appKm:0,appUp:0,viaIdx:-1});
-  const r=analyse(app.coords.concat(c.coords.slice(1)));
-  return Object.assign(r,{km2:c.km,up2:c.up,dn2:c.dn,appKm:app.km,appUp:app.up,viaIdx:app.coords.length-1});
+function combine(app,c,ret){
+  if(!app)return Object.assign(c,{km2:c.km,up2:c.up,dn2:c.dn,appKm:0,appUp:0,retKm:0,retUp:0,viaIdx:-1,retIdx:-1});
+  let all=app.coords.concat(c.coords.slice(1));const retIdx=ret?all.length-1:-1;
+  if(ret)all=all.concat(ret.coords.slice(1));
+  const r=analyse(all);
+  return Object.assign(r,{km2:c.km,up2:c.up,dn2:c.dn,appKm:app.km,appUp:app.up,retKm:ret?ret.km:0,retUp:ret?ret.up:0,viaIdx:app.coords.length-1,retIdx});
 }
 function pick(arr){
   const uniq=[];
@@ -402,8 +425,8 @@ function draw(){
 }
 function select(i){S.sel=i;draw();refreshCards();}
 const NAMES={loop:["Boucle","Boucle","Boucle"],out:["Aller-retour","Aller-retour","Aller-retour"],ab:["Liaison","Liaison","Liaison"]};
-function dirName(r){const O=S.V||S.A,from=Math.max(0,r.viaIdx);let far=r.coords[from],m=0;
-  for(let i=from;i<r.coords.length;i++){const d=hav(O,r.coords[i]);if(d>m){m=d;far=r.coords[i];}}
+function dirName(r){const O=S.V||S.A,from=Math.max(0,r.viaIdx),to=r.retIdx>0?r.retIdx:r.coords.length-1;let far=r.coords[from],m=0;
+  for(let i=from;i<=to;i++){const d=hav(O,r.coords[i]);if(d>m){m=d;far=r.coords[i];}}
   const b=bearing(O,far);return["nord","nord-est","est","sud-est","sud","sud-ouest","ouest","nord-ouest"][Math.round(b/45)%8];}
 function grade(r){const rate=r.up2/r.km2;return rate<6?"Plat":rate<18?"Vallonné":"Montagne";}
 function hoursOf(km,up){
@@ -418,7 +441,8 @@ function profileSVG(r,col){
   const lo=Math.min(...e),hi=Math.max(...e),span=Math.max(20,hi-lo);
   let d="";for(let i=0;i<n;i+=step){const x=r.cum[i]/r.km*W,y=Hh-4-((r.ele[i]??lo)-lo)/span*(Hh-14);d+=(d?"L":"M")+x.toFixed(1)+" "+y.toFixed(1);}
   return`<svg class="prof" viewBox="0 0 ${W} ${Hh}" preserveAspectRatio="none" aria-label="Profil d'altitude de ${Math.round(lo)} à ${Math.round(hi)} m">
-  ${r.viaIdx>0?`<rect x="0" y="0" width="${(r.cum[r.viaIdx]/r.km*W).toFixed(1)}" height="${Hh}" fill="#8d8e93" fill-opacity=".12"/><line x1="${(r.cum[r.viaIdx]/r.km*W).toFixed(1)}" x2="${(r.cum[r.viaIdx]/r.km*W).toFixed(1)}" y1="0" y2="${Hh}" stroke="#c6ff00" stroke-dasharray="3 3" vector-effect="non-scaling-stroke"/>`:""}
+  ${[r.viaIdx>0?[0,r.cum[r.viaIdx],r.cum[r.viaIdx]]:null,r.retIdx>0?[r.cum[r.retIdx],r.km,r.cum[r.retIdx]]:null].filter(Boolean).map(([a,b,m])=>{const x1=a/r.km*W,x2=b/r.km*W,xm=(m/r.km*W).toFixed(1);
+    return`<rect x="${x1.toFixed(1)}" y="0" width="${(x2-x1).toFixed(1)}" height="${Hh}" fill="#8d8e93" fill-opacity=".12"/><line x1="${xm}" x2="${xm}" y1="0" y2="${Hh}" stroke="#c6ff00" stroke-dasharray="3 3" vector-effect="non-scaling-stroke"/>`;}).join("")}
   <path d="${d}L${W} ${Hh}L0 ${Hh}Z" fill="${col}" fill-opacity=".18"/><path d="${d}" fill="none" stroke="${col}" stroke-width="1.6" vector-effect="non-scaling-stroke"/>
   <text x="2" y="10" fill="#8d8e93" font-size="10">${Math.round(hi)} m</text><text x="2" y="${Hh-2}" fill="#8d8e93" font-size="10">${Math.round(lo)} m</text></svg>`;
 }
@@ -431,7 +455,7 @@ function refreshCards(){
     return`<div class="card" style="--c:${COLORS[i]}" role="option" tabindex="0" aria-selected="${i===S.sel}" data-i="${i}">
     <h3>${String.fromCharCode(65+i)} · ${NAMES[S.shape][i]} ${S.shape==="ab"?"":"vers le "+dirName(r)}<em>${grade(r)}</em></h3>
     <div class="stats"><div>${r.km2.toFixed(1)}<span>${via?"km dès passage":"km"}</span></div><div>${Math.round(r.up2)} m<span>D+</span></div>${kmE}<div>${timeOf(r)}<span>estimé</span></div></div>
-    ${via?`<div class="sub">Approche <b>${r.appKm.toFixed(1)} km</b> · D+ ${Math.round(r.appUp)} m &nbsp;|&nbsp; Total <b>${r.km.toFixed(1)} km</b> · D+ ${Math.round(r.up)} m · ${fmtH(hoursOf(r.km,r.up))}</div>`:""}
+    ${via?`<div class="sub">Aller au passage <b>${r.appKm.toFixed(1)} km</b>${r.retKm>0?` · Retour <b>${r.retKm.toFixed(1)} km</b>`:""}<br>Journée complète <b>${r.km.toFixed(1)} km</b> · D+ ${Math.round(r.up)} m · ${fmtH(hoursOf(r.km,r.up))}</div>`:""}
     ${profileSVG(r,COLORS[i])}
     <div class="acts"><button type="button" data-a="show" data-i="${i}">Voir sur la carte</button><button type="button" class="dl" data-a="gpx" data-i="${i}">Exporter GPX</button></div></div>`;}).join("");
   $("#dlAll").classList.toggle("hide",S.routes.length<2);
@@ -441,12 +465,12 @@ $("#cards").addEventListener("click",e=>{const b=e.target.closest("button");cons
 $("#cards").addEventListener("keydown",e=>{if(e.key==="Enter"&&e.target.classList.contains("card"))select(+e.target.dataset.i)});
 
 /* ---------- export GPX ---------- */
-function gpxName(i){const r=S.routes[i];return`Loopr ${S.sport==="run"?"Run":"Vélo"} ${r.km2.toFixed(1)}km D+${Math.round(r.up2)}m${r.appKm>0?" (+"+r.appKm.toFixed(1)+"km approche)":""} ${String.fromCharCode(65+i)}`;}
+function gpxName(i){const r=S.routes[i];return`Loopr ${S.sport==="run"?"Run":"Vélo"} ${r.km2.toFixed(1)}km D+${Math.round(r.up2)}m${r.appKm>0?" (total "+r.km.toFixed(1)+"km)":""} ${String.fromCharCode(65+i)}`;}
 function gpx(i){
   const r=S.routes[i],name=gpxName(i);
   // horodatage fictif à vitesse constante (temps estimé) : Garmin et d'autres en ont besoin pour calculer la distance
   const t0=Date.now(),totalMs=hoursOf(r.km,r.up)*3600000;
-  const wpt=r.viaIdx>0?`<wpt lat="${r.coords[r.viaIdx].lat.toFixed(6)}" lon="${r.coords[r.viaIdx].lon.toFixed(6)}"><name>Point de passage</name><desc>${esc(S.V?S.V.name:"")} — début des ${r.km2.toFixed(1)} km</desc></wpt>\n`:"";
+  const wpt=r.viaIdx>0?`<wpt lat="${r.coords[r.viaIdx].lat.toFixed(6)}" lon="${r.coords[r.viaIdx].lon.toFixed(6)}"><name>Point de passage</name><desc>${esc(S.V?S.V.name:"")} — début et fin des ${r.km2.toFixed(1)} km</desc></wpt>\n`:"";
   const pts=r.coords.map((p,k)=>`<trkpt lat="${p.lat.toFixed(6)}" lon="${p.lon.toFixed(6)}">${r.ele[k]!=null?`<ele>${r.ele[k].toFixed(1)}</ele>`:""}<time>${new Date(t0+r.cum[k]/r.km*totalMs).toISOString().replace(/\.\d+Z$/,"Z")}</time></trkpt>`).join("\n");
   const xml=`<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="Loopr" xmlns="http://www.topografix.com/GPX/1/1">
@@ -455,7 +479,7 @@ ${wpt}<trk><name>${esc(name)}</name><type>${S.sport==="run"?"running":"cycling"}
 ${pts}
 </trkseg></trk></gpx>`;
   const blob=new Blob([xml],{type:"application/gpx+xml"}),a=document.createElement("a");
-  a.href=URL.createObjectURL(blob);a.download=name.replace(/[^\w+.-]+/g,"_")+".gpx";document.body.appendChild(a);a.click();
+  a.href=URL.createObjectURL(blob);a.download=name.normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^\w+.-]+/g,"_")+".gpx";document.body.appendChild(a);a.click();
   setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1500);
 }
 $("#dlAll").onclick=()=>S.routes.forEach((_,i)=>setTimeout(()=>gpx(i),i*400));
