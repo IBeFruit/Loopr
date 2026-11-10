@@ -174,7 +174,10 @@ h1 span{color:var(--ac)}
       <div class="cards" id="cards">
         <div class="empty"><b>Pose un départ</b> (adresse ou clic sur la carte), choisis la distance et le dénivelé, puis génère. Tu obtiens 3 circuits avec leur profil d'altitude, à exporter en GPX pour ta montre ou ton compteur.</div>
       </div>
-      <button class="btn ghost hide" id="dlAll" type="button" style="margin-top:10px">Exporter les 3 en GPX</button>
+      <div class="row2" style="margin-top:10px">
+        <button class="btn ghost hide" id="more" type="button">Autres tracés</button>
+        <button class="btn ghost hide" id="dlAll" type="button">Tout exporter en GPX</button>
+      </div>
     </section>
 
     <p class="foot">Itinéraires calculés par <a href="https://brouter.de" target="_blank" rel="noopener">BRouter</a> sur les données <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>. Recherche d'adresse via Nominatim.</p>
@@ -357,45 +360,71 @@ function candidatesPlan(){
   else [1,-1].forEach(s=>[1,0.6].forEach(m=>out.push({scale:1,build:f=>[A,dest(M,b+90*s,h*m*f),B]})));
   return out;
 }
-async function generate(){
+/* Trajets aller/retour vers le point de passage : calculés une fois, réutilisés pour « autre tracé » */
+let LEGS=null,busy=false,seen=[];
+function legsKey(){return JSON.stringify([S.A,S.V,S.shape,S.sport,S.surface,S.calm]);}
+function setBusy(on,label){busy=on;document.querySelectorAll("#go,#more,.card [data-a=again]").forEach(b=>{b.disabled=on;b.toggleAttribute("aria-busy",on);});
+  if(label!=null)$("#more").textContent=label;}
+async function getLegs(){
+  if(!S.V)return{app:null,ret:null};
+  if(LEGS&&LEGS.key===legsKey())return LEGS;
+  status("Calcul du trajet jusqu'au point de passage…");
+  const app=await route([S.A,S.V],0,{robust:true,keepSpurs:true});
+  let ret=null;
+  if(S.shape!=="ab"){
+    status("Calcul du retour depuis le point de passage…");
+    try{ret=await route([S.V,S.A],0,{robust:true,keepSpurs:true});}
+    catch(e){ret=analyse(app.coords.slice().reverse());}
+  }
+  return LEGS={key:legsKey(),app,ret};
+}
+/* centre de gravité de la partie comptée : sert à reconnaître deux tracés trop semblables */
+function sig(r){const a=Math.max(0,r.viaIdx),b=r.retIdx>0?r.retIdx:r.coords.length-1;let la=0,lo=0,n=0;
+  for(let i=a;i<=b;i+=3){la+=r.coords[i].lat;lo+=r.coords[i].lon;n++;}return{lat:la/n,lon:lo/n};}
+function tooClose(r,list){const s=sig(r),lim=Math.max(0.5,S.dist*0.05);return list.some(o=>hav(s,o)<lim);}
+
+/* mode "all" : 3 nouveaux circuits ; mode "more" : 3 autres, différents de ceux déjà vus ; mode nombre i : remplace la carte i */
+async function generate(mode){
+  mode=mode??"all";
+  if(busy)return;
   if(!S.A){status("Pose d'abord un point de départ.",true);return;}
   if(S.shape==="ab"&&!S.B){status("Pose un point d'arrivée pour un circuit A → B.",true);return;}
-  const btn=$("#go");btn.setAttribute("aria-busy","true");btn.disabled=true;goodProfile=null;
-  let app=null,ret=null;
-  S.routes=[];lines.forEach(l=>map.removeLayer(l));lines=[];
-  if(S.V){
-    status("Calcul du trajet jusqu'au point de passage…");
-    try{
-      app=await route([S.A,S.V],0,{robust:true,keepSpurs:true});
-      if(S.shape!=="ab"){
-        status("Calcul du retour depuis le point de passage…");
-        try{ret=await route([S.V,S.A],0,{robust:true,keepSpurs:true});}
-        catch(e){ret=analyse(app.coords.slice().reverse());}
-      }
-    }catch(e){
-      btn.removeAttribute("aria-busy");btn.disabled=false;
-      const why=/not mapped|no.*way|position/i.test(e.message)?"Le point de passage est trop loin d'une route : déplace le losange sur la route la plus proche.":"Le serveur d'itinéraires n'a pas répondu. Réessaie dans quelques secondes.";
-      status("Impossible de calculer le trajet jusqu'au point de passage. "+why+" ("+e.message.slice(0,80)+")",true);
-      $("#cards").innerHTML='<div class="empty">Aucun circuit pour l\'instant.</div>';$("#count").textContent="";$("#dlAll").classList.add("hide");
-      return;
-    }
+  const one=typeof mode==="number";
+  if(mode==="all"){seen=[];goodProfile=null;S.routes=[];lines.forEach(l=>map.removeLayer(l));lines=[];}
+  setBusy(true,mode==="more"?"Recherche d'autres tracés…":null);
+  if(one)$(`.card[data-i="${mode}"] [data-a=again]`).textContent="Recherche…";
+  let legs;
+  try{legs=await getLegs();}
+  catch(e){
+    setBusy(false,"Autres tracés");
+    const why=/not mapped|no.*way|position/i.test(e.message)?"Le point de passage est trop loin d'une route : déplace le losange sur la route la plus proche.":"Le serveur d'itinéraires n'a pas répondu. Réessaie dans quelques secondes.";
+    status("Impossible de calculer le trajet jusqu'au point de passage. "+why+" ("+e.message.slice(0,80)+")",true);
+    if(mode==="all"){$("#cards").innerHTML='<div class="empty">Aucun circuit pour l\'instant.</div>';$("#count").textContent="";$("#dlAll").classList.add("hide");$("#more").classList.add("hide");}
+    else refreshCards();
+    return;
   }
-  const plan=candidatesPlan(),got=[];let done=0;
+  const plan=candidatesPlan().slice(0,one?4:6),got=[];let done=0;
   status(`Calcul des itinéraires… 0/${plan.length}`);
   const run=async c=>{
     try{
       let f=1,res=await route(c.build(f),c.alt,{keepSpurs:S.shape==="out"});
       const fixable=!(S.shape==="ab"&&c.alt!=null);
       if(fixable&&Math.abs(res.km-S.dist)/S.dist>0.08){f=S.dist/res.km;res=await route(c.build(f),c.alt,{keepSpurs:S.shape==="out"});}
-      got.push(combine(app,res,ret));
+      got.push(combine(legs.app,res,legs.ret));
     }catch(e){}
     done++;status(`Calcul des itinéraires… ${done}/${plan.length}`);
   };
   for(let i=0;i<plan.length;i+=2)await Promise.all(plan.slice(i,i+2).map(run));
-  btn.removeAttribute("aria-busy");btn.disabled=false;
-  if(!got.length){status("Le serveur d'itinéraires n'a pas répondu. Réessaie dans un instant ou déplace le départ sur une route.",true);return;}
-  S.routes=pick(got);S.sel=0;
-  status(got.length<plan.length?`${S.routes.length} circuits trouvés (${plan.length-got.length} tracés impossibles ignorés).`:"");
+  setBusy(false,"Autres tracés");
+  if(!got.length){status("Le serveur d'itinéraires n'a pas répondu. Réessaie dans un instant ou déplace le départ sur une route.",true);refreshCards();return;}
+  const avoid=seen.concat(S.routes.filter((_,k)=>k!==mode).map(sig));
+  let fresh=mode==="all"?got:got.filter(r=>!tooClose(r,avoid));
+  let note="";
+  if(!fresh.length){fresh=got;note="Pas de tracé vraiment différent trouvé cette fois : réessaie, ou change la distance ou le dénivelé.";}
+  if(one){S.routes[mode]=pick(fresh,1)[0];S.sel=mode;}
+  else{S.routes=pick(fresh,3);S.sel=0;}
+  S.routes.forEach(r=>{const s=sig(r);if(!tooClose(r,seen))seen.push(s);});
+  status(note||(got.length<plan.length?`${plan.length-got.length} tracés impossibles ignorés.`:""),!!note);
   draw();refreshCards();
 }
 /* assemble approche + circuit ; km2/up2/dn2 = partie comptée (depuis le passage) */
@@ -406,12 +435,12 @@ function combine(app,c,ret){
   const r=analyse(all);
   return Object.assign(r,{km2:c.km,up2:c.up,dn2:c.dn,appKm:app.km,appUp:app.up,retKm:ret?ret.km:0,retUp:ret?ret.up:0,viaIdx:app.coords.length-1,retIdx});
 }
-function pick(arr){
+function pick(arr,n){
   const uniq=[];
-  arr.forEach(r=>{if(!uniq.some(u=>Math.abs(u.km2-r.km2)<0.15&&Math.abs(u.up2-r.up2)<8))uniq.push(r);});
+  arr.forEach(r=>{if(!uniq.some(u=>Math.abs(u.km2-r.km2)<0.15&&Math.abs(u.up2-r.up2)<8&&tooClose(r,[sig(u)])))uniq.push(r);});
   const score=r=>{const rate=r.up2/r.km2,de=Math.abs(r.km2-S.dist)/S.dist*40;
     if(S.elev==="any")return de;return Math.abs(rate-ELEV_TARGET[S.elev])+de;};
-  return uniq.sort((a,b)=>score(a)-score(b)).slice(0,3);
+  return uniq.sort((a,b)=>score(a)-score(b)).slice(0,n||3);
 }
 
 /* ---------- rendu ---------- */
@@ -453,15 +482,17 @@ function refreshCards(){
   box.innerHTML=S.routes.map((r,i)=>{const kmE=S.sport==="run"?`<div>${(r.km2+r.up2/100).toFixed(1)}<span>km effort</span></div>`:`<div>${Math.round(r.dn2)} m<span>D−</span></div>`;
     const via=r.appKm>0;
     return`<div class="card" style="--c:${COLORS[i]}" role="option" tabindex="0" aria-selected="${i===S.sel}" data-i="${i}">
-    <h3>${String.fromCharCode(65+i)} · ${NAMES[S.shape][i]} ${S.shape==="ab"?"":"vers le "+dirName(r)}<em>${grade(r)}</em></h3>
+    <h3>${String.fromCharCode(65+i)} · ${NAMES[S.shape][i]} ${S.shape==="ab"?"":(d=>(/^[eo]/.test(d)?"vers l'":"vers le ")+d)(dirName(r))}<em>${grade(r)}</em></h3>
     <div class="stats"><div>${r.km2.toFixed(1)}<span>${via?"km dès passage":"km"}</span></div><div>${Math.round(r.up2)} m<span>D+</span></div>${kmE}<div>${timeOf(r)}<span>estimé</span></div></div>
     ${via?`<div class="sub">Aller au passage <b>${r.appKm.toFixed(1)} km</b>${r.retKm>0?` · Retour <b>${r.retKm.toFixed(1)} km</b>`:""}<br>Journée complète <b>${r.km.toFixed(1)} km</b> · D+ ${Math.round(r.up)} m · ${fmtH(hoursOf(r.km,r.up))}</div>`:""}
     ${profileSVG(r,COLORS[i])}
-    <div class="acts"><button type="button" data-a="show" data-i="${i}">Voir sur la carte</button><button type="button" class="dl" data-a="gpx" data-i="${i}">Exporter GPX</button></div></div>`;}).join("");
+    <div class="acts"><button type="button" data-a="show" data-i="${i}">Voir</button><button type="button" data-a="again" data-i="${i}">Autre tracé</button><button type="button" class="dl" data-a="gpx" data-i="${i}">GPX</button></div></div>`;}).join("");
   $("#dlAll").classList.toggle("hide",S.routes.length<2);
+  $("#more").classList.toggle("hide",!S.routes.length);
 }
 $("#cards").addEventListener("click",e=>{const b=e.target.closest("button");const c=e.target.closest(".card");if(!c)return;const i=+c.dataset.i;
-  if(b&&b.dataset.a==="gpx"){gpx(i);return;}select(i);if(innerWidth<=820)$("#map").scrollIntoView({behavior:"smooth"});});
+  if(b&&b.dataset.a==="gpx"){gpx(i);return;}
+  if(b&&b.dataset.a==="again"){generate(i);return;}select(i);if(innerWidth<=820)$("#map").scrollIntoView({behavior:"smooth"});});
 $("#cards").addEventListener("keydown",e=>{if(e.key==="Enter"&&e.target.classList.contains("card"))select(+e.target.dataset.i)});
 
 /* ---------- export GPX ---------- */
@@ -483,7 +514,8 @@ ${pts}
   setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1500);
 }
 $("#dlAll").onclick=()=>S.routes.forEach((_,i)=>setTimeout(()=>gpx(i),i*400));
-$("#go").onclick=generate;
+$("#go").onclick=()=>generate("all");
+$("#more").onclick=()=>generate("more");
 
 /* ---------- init ---------- */
 paint($("#sport"),S.sport);paint($("#shape"),S.shape);paint($("#elev"),S.elev);
